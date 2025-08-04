@@ -17,6 +17,12 @@ import io.cucumber.messages.types.TableCell;
 import io.cucumber.messages.types.TableRow;
 import io.cucumber.messages.types.Tag;
 
+import java.io.IOException;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -30,6 +36,7 @@ import static io.cucumber.gherkin.Parser.TokenType;
 
 class GherkinDocumentBuilder implements Builder<GherkinDocument> {
     private final List<Comment> comments = new ArrayList<>();
+    private final List<Token> initializationStoriesTokens = new ArrayList<>();
     private final IdGenerator idGenerator;
     private String uri;
 
@@ -51,13 +58,16 @@ class GherkinDocumentBuilder implements Builder<GherkinDocument> {
         return stack.peek();
     }
 
+
     @Override
     public void build(Token token) {
         RuleType ruleType = RuleType.cast(token.matchedType);
         if (token.matchedType == TokenType.Comment) {
             Comment comment = new Comment(getLocation(token, 0), token.matchedText);
             comments.add(comment);
-        } else {
+        } else if (token.matchedType == TokenType.InitializationLine) {
+            initializationStoriesTokens.add(token);
+        }else {
             currentNode().add(ruleType, token);
         }
     }
@@ -90,7 +100,7 @@ class GherkinDocumentBuilder implements Builder<GherkinDocument> {
             }
             case DocString: {
                 Token separatorToken = node.getTokens(TokenType.DocStringSeparator).get(0);
-                String mediaType = separatorToken.matchedText.length() > 0 ? separatorToken.matchedText : null;
+                String mediaType = !separatorToken.matchedText.isEmpty() ? separatorToken.matchedText : null;
                 List<Token> lineTokens = node.getTokens(TokenType.Other);
                 StringBuilder content = new StringBuilder();
                 boolean newLine = false;
@@ -173,13 +183,20 @@ class GherkinDocumentBuilder implements Builder<GherkinDocument> {
                         .collect(Collectors.joining("\n"));
             }
             case Feature: {
+
+                List<FeatureChild> initializationChildren = initializationStoriesTokens.stream()
+                        .map(this::getInitializationNode)
+                        .map(FeatureChild::of)
+                        .collect(Collectors.toList());
+
                 AstNode header = node.getSingle(RuleType.FeatureHeader, new AstNode(RuleType.FeatureHeader));
                 if (header == null) return null;
                 List<Tag> tags = getTags(header);
                 Token featureLine = header.getToken(TokenType.FeatureLine);
                 if (featureLine == null) return null;
 
-                List<FeatureChild> children = new ArrayList<>();
+                List<FeatureChild> children = new ArrayList<>(initializationChildren);
+
                 Background background = node.getSingle(RuleType.Background, null);
                 if (background != null) {
                     children.add(new FeatureChild(null, background, null));
@@ -309,6 +326,52 @@ class GherkinDocumentBuilder implements Builder<GherkinDocument> {
         }
         return tags;
     }
+
+    // CODE OVERRIDE – START
+    private List<Step> getInitializationSteps(String initializationFeature){
+        String featureContent;
+        List<Step> initializationSteps = new ArrayList<>();
+        try {
+            URL initializationFeaturePath = GherkinDocumentBuilder.class.getResource(initializationFeature);
+            if (initializationFeaturePath == null) {
+                throw new RuntimeException("Initialization feature not found");
+            }
+            Path path = Paths.get(initializationFeaturePath.toURI());
+            featureContent = new String(Files.readAllBytes(path));
+        } catch (IOException | URISyntaxException e) {
+            throw new RuntimeException(e);
+        }
+
+        GherkinDocumentBuilder documentBuilder = new GherkinDocumentBuilder(idGenerator, initializationFeature);
+        Parser<GherkinDocument> parser = new Parser<>(documentBuilder);
+        GherkinDocument initializationDocument = parser.parse(featureContent, initializationFeature);
+        initializationDocument.getFeature().ifPresent(initializationFeatureFromDocument -> {
+            List<FeatureChild> initializationFeatureChildren = initializationDocument.getFeature().get().getChildren();
+
+            for (FeatureChild featureChild : initializationFeatureChildren) {
+                if (featureChild.getScenario().isPresent()) {
+                    throw new IllegalStateException("Initialization feature can not contain scenario/s");
+                } else if (featureChild.getBackground().isPresent()) {
+                    initializationSteps.addAll(featureChild.getBackground().get().getSteps());
+                }
+            }
+        });
+
+        return initializationSteps;
+    }
+
+    private Background getInitializationNode(Token initializationFeature){
+
+        return new Background(
+                new io.cucumber.messages.types.Location((long) initializationFeature.location.getLine(), (long) initializationFeature.location.getColumn()),
+                initializationFeature.matchedKeyword,
+                initializationFeature.matchedText,
+                initializationFeature.matchedText,
+                getInitializationSteps(initializationFeature.matchedText),
+                idGenerator.newId()
+        );
+    }
+// CODE OVERRIDE – END
 
     @Override
     public GherkinDocument getResult() {

@@ -1,10 +1,6 @@
 package io.cucumber.gherkin;
 
 import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Optional;
-import java.util.AbstractMap.SimpleEntry;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -124,6 +120,31 @@ class TokenMatcher implements ITokenMatcher {
     public boolean match_RuleLine(Token token) {
         return matchTitleLine(token, TokenType.RuleLine, currentDialect.getRuleKeywords());
     }
+
+    // CODE OVERRIDE - START
+    /*
+    This method is added to match the initialization line in the Gherkin Parser.
+    This is currently only matching the keyword "Initialization Feature".
+    However to support multiple dialects as the other keywords, we can override io.cucumber.gherkin.GherkinDialects
+    along with adding below variable & method in io.cucumber.gherkin.GherkinDialect as
+
+        private final List<String> initializationKeywords;
+
+        public List<String> getInitializationKeywords() {
+            return initializationKeywords;
+        }
+
+    and call this method to match the keyword as
+    return matchTitleLine(token, TokenType.InitializationLine, currentDialect.getInitializationKeywords());
+    */
+
+    @Override
+    public boolean match_InitializationLine(Token token) {
+        List<String> keywords = new java.util.ArrayList<>();
+        keywords.add("Initialization Feature");
+        return matchTitleLine(token, TokenType.InitializationLine, keywords);
+    }
+// CODE OVERRIDE - END
 
     @Override
     public boolean match_BackgroundLine(Token token) {
